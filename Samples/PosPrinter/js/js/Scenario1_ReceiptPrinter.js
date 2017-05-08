@@ -33,7 +33,11 @@
                 _claimedPrinter.close();
                 _claimedPrinter = null;
             }
-            _printer = null;
+
+            if (_printer !== null) {
+                _printer.close();
+                _printer = null;
+            }
         }
     });
 
@@ -50,61 +54,40 @@
 
         if (_printer == null) {
 
-            var devicestr = Windows.Devices.PointOfService.PosPrinter.getDeviceSelector();
-            Windows.Devices.Enumeration.DeviceInformation.findAllAsync(devicestr, null).then(function (deviceCollection) {
+            SdkSample.getFirstReceiptPrinterAsync().then(function (printer) {
 
-                if (deviceCollection.length == 0) {
-                    WinJS.log("No printers found during enumeration.", "sample", "error");
-                }
+                if (printer != null) {
+                    _printer = printer;
 
-                var id = deviceCollection[0].id;
-                Windows.Devices.PointOfService.PosPrinter.fromIdAsync(id).then(function (printer) {
+                    //Claim
+                    _printer.claimPrinterAsync().done(function (claimedPrinter) {
 
-                    if (printer != null) {
-                        _printer = printer;
+                        if (claimedPrinter !== null) {
 
-                        if (_printer.capabilities.receipt.isPrinterPresent) {
+                            _claimedPrinter = claimedPrinter;
 
-                            //Claim
-                            _printer.claimPrinterAsync().done(function (claimedPrinter) {
+                            //Enable printer
+                            _claimedPrinter.enableAsync().done(function (success) {
 
-                                if (claimedPrinter !== null) {
+                                if (success) {
+                                    WinJS.log("Enabled printer. Device ID: " + _claimedPrinter.deviceId, "sample", "status");
 
-                                    _claimedPrinter = claimedPrinter;
-
-                                    //Enable printer
-                                    _claimedPrinter.enableAsync().done(function (success) {
-
-                                        if (success) {
-                                            WinJS.log("Enabled printer. Device ID: " + _claimedPrinter.deviceId, "sample", "status");
-
-                                            document.getElementById("findClaimEnableButton").disabled = true;
-                                            document.getElementById("printLineButton").disabled = false;
-                                            document.getElementById("printReceiptButton").disabled = false;
-                                            document.getElementById("scenarioEndButton").disabled = false;
-                                        }
-                                        else {
-                                            WinJS.log("Could not enable printer.", "sample", "error");
-                                        }
-                                        return;
-                                    },
-                                    function error(e) {
-                                        WinJS.log("Error enabling printer: " + e.message, "sample", "error");
-                                    });
-                                    return;
+                                    document.getElementById("findClaimEnableButton").disabled = true;
+                                    document.getElementById("printLineButton").disabled = false;
+                                    document.getElementById("printReceiptButton").disabled = false;
+                                    document.getElementById("scenarioEndButton").disabled = false;
                                 }
                                 else {
-                                    WinJS.log("Could not claim the printer.", "sample", "error");
+                                    WinJS.log("Could not enable printer.", "sample", "error");
                                 }
                             });
+                        } else {
+                            WinJS.log("Could not claim the printer.", "sample", "error");
                         }
-                    }
-                },
-                function error(e) {
-                    WinJS.log("FromIdAsync was unsuccessful: " + e.message, "sample", "error");
-                });//end of fromIdAsync
-            }, function error(e) {
-                WinJS.log("Printer device enumeration unsuccessful: " + e.message, "sample", "error");
+                    });
+                } else {
+                    WinJS.log("No printer found", "sample", "error");
+                }
             });
         }
     }
@@ -116,7 +99,11 @@
             _claimedPrinter = null;
         }
 
-        _printer = null;
+        if (_printer !== null) {
+            _printer.close();
+            _printer = null;
+        }
+
         WinJS.log("Scenario ended.", "sample", "status");
 
         document.getElementById("findClaimEnableButton").disabled = false;
@@ -157,40 +144,60 @@
             WinJS.log("Claimed printer instance is null. Cannot print.", "sample", "error");
         }
         else {
-            var job = _claimedPrinter.receipt.createJob();
-            job.printLine("======================");
-            job.printLine("|   Sample Header    |");
-            job.printLine("======================");
-
-            job.printLine("Item             Price");
-            job.printLine("----------------------");
-
-            job.printLine("Books            10.40");
-            job.printLine("Games             9.60");
-            job.printLine("----------------------");
-            job.printLine("Total----------- 20.00");
-
-            job.printLine();
-            job.printLine("______________________");
-            job.printLine("Tip");
-            job.printLine();
-            job.printLine("______________________");
-            job.printLine("Signature");
-            job.printLine();
-            job.printLine("Merchant Copy");
-            lineFeedAndCutPaper(job);
+            var receiptString = "======================\n" +
+                                "|   Sample Header    |\n" +
+                                "======================\n" +
+                                "Item             Price\n" +
+                                "----------------------\n" +
+                                "Books            10.40\n" +
+                                "Games             9.60\n" +
+                                "----------------------\n" +
+                                "Total----------- 20.00\n";
 
 
-            job.executeAsync().done(function () {
-                WinJS.log("Printed receipt.", "sample", "status");
+            var merchantJob = _claimedPrinter.receipt.createJob();
+            var merchantFooter = getMerchantFooter();
+            printLineFeedAndCutPaper(merchantJob, receiptString + merchantFooter);
+            var customerJob = _claimedPrinter.receipt.createJob();
+            var customerFooter = getCustomerFooter();
+            printLineFeedAndCutPaper(customerJob, receiptString + customerFooter);
+
+
+            merchantJob.executeAsync().done(function () {
+                WinJS.log("Printed merchant receipt.", "sample", "status");
             }, function error(e) {
                 WinJS.log("Was not able to print receipt: " + e.message, "sample", "error");
+            });
+
+            customerJob.executeAsync().done(function () {
+                WinJS.log("Printed customer receipt.", "sample", "status");
+            }, function error(e) {
+                WinJS.log("Was not able to print customer footer: " + e.message, "sample", "error");
             });
         }
     }
 
+    function getMerchantFooter() {
+        return "\n" +
+               "______________________\n" +
+               "Tip\n" +
+               "\n" +
+               "______________________\n" +
+               "Signature\n" +
+               "\n" +
+               "Merchant Copy\n";
+    }
+
+    function getCustomerFooter() {
+        return "\n" +
+               "______________________\n" +
+               "Tip\n" +
+               "\n" +
+               "Customer Copy\n";
+    }
+
     // Cut the paper after printing enough blank lines to clear the paper cutter.
-    function lineFeedAndCutPaper(job) {
+    function printLineFeedAndCutPaper(job, receipt) {
 
         if (_printer == null) {
             WinJS.log("No printers found. Cannot print.", "sample", "error");
@@ -199,9 +206,14 @@
             WinJS.log("Claimed printer instance is null. Cannot print.", "sample", "error");
         }
         else {
+            // Passing a multi-line string to the print method results in
+            // smoother paper feeding than sending multiple single-line strings
+            // to printLine.
+            var feedString = "";
             for (var n = 0; n < _claimedPrinter.receipt.linesToPaperCut; n++) {
-                job.printLine();
+                feedString += "\n";
             }
+            job.print(receipt + feedString);
             if (_printer.capabilities.receipt.canCutPaper) {
                 job.cutPaper();
             }

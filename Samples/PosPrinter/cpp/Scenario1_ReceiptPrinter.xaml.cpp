@@ -175,36 +175,31 @@ void Scenario1_ReceiptPrinter::PrintReceipt()
 {
     if (printer != nullptr && claimedPrinter != nullptr)
     {
+        String^ receiptString = "======================\n" +
+                                "|   Sample Header    |\n" +
+                                "======================\n" +
+                                "Item             Price\n" +
+                                "----------------------\n" +
+                                "Books            10.40\n" +
+                                "Games             9.60\n" +
+                                "----------------------\n" +
+                                "Total----------- 20.00\n";
 
-        ReceiptPrintJob^ job = claimedPrinter->Receipt->CreateJob();
-        job->PrintLine("======================");
-        job->PrintLine("|   Sample Header    |");
-        job->PrintLine("======================");
+        ReceiptPrintJob^ merchantJob = claimedPrinter->Receipt->CreateJob();
+        String^ merchantFooter = GetMerchantFooter();
+        PrintLineFeedAndCutPaper(merchantJob, receiptString + merchantFooter);
+        ReceiptPrintJob^ customerJob = claimedPrinter->Receipt->CreateJob();
+        String^ customerFooter = GetCustomerFooter();
+        PrintLineFeedAndCutPaper(customerJob, receiptString + customerFooter);
 
-        job->PrintLine("Item             Price");
-        job->PrintLine("----------------------");
 
-        job->PrintLine("Books            10.40");
-        job->PrintLine("Games             9.60");
-        job->PrintLine("----------------------");
-        job->PrintLine("Total----------- 20.00");
 
-        ReceiptPrintJob^ merchantFooter = GetMerchantFooter(claimedPrinter);
-        ReceiptPrintJob^ customerFooter = GetCustomerFooter(claimedPrinter);
-
-        create_task(job->ExecuteAsync()).then([this, customerFooter, merchantFooter, job](bool)
+        create_task(merchantJob->ExecuteAsync()).then([this, customerJob](bool)
         {
-            create_task(customerFooter->ExecuteAsync()).then([this, merchantFooter, job](bool)
+            rootPage->NotifyUser("Printed merchant receipt.", NotifyType::StatusMessage);
+            create_task(customerJob->ExecuteAsync()).then([this](bool)
             {
                 rootPage->NotifyUser("Printed customer receipt.", NotifyType::StatusMessage);
-
-                create_task(job->ExecuteAsync()).then([this, merchantFooter](bool)
-                {
-                    create_task(merchantFooter->ExecuteAsync()).then([this](bool)
-                    {
-                        rootPage->NotifyUser("Printed merchant receipt.", NotifyType::StatusMessage);
-                    });
-                });
             });
         });
 
@@ -216,45 +211,42 @@ void Scenario1_ReceiptPrinter::PrintReceipt()
     }
 }
 
-ReceiptPrintJob^ Scenario1_ReceiptPrinter::GetMerchantFooter(ClaimedPosPrinter ^ claimedInstance)
+Platform::String^ Scenario1_ReceiptPrinter::GetMerchantFooter()
 {
-    ReceiptPrintJob^ merchantFooter = claimedInstance->Receipt->CreateJob();
-    merchantFooter->PrintLine();
-    merchantFooter->PrintLine("______________________");
-    merchantFooter->PrintLine("Tip");
-    merchantFooter->PrintLine();
-    merchantFooter->PrintLine("______________________");
-    merchantFooter->PrintLine("Signature");
-    merchantFooter->PrintLine();
-    merchantFooter->PrintLine("Merchant Copy");
-    LineFeedAndCutPaper(merchantFooter);
-
-    return merchantFooter;
+    return "\n" +
+           "______________________\n" +
+           "Tip\n" +
+           "\n" +
+           "______________________\n" +
+           "Signature\n" +
+           "\n" +
+           "Merchant Copy\n";
 }
 
-ReceiptPrintJob^ Scenario1_ReceiptPrinter::GetCustomerFooter(ClaimedPosPrinter ^ claimedInstance)
+Platform::String^ Scenario1_ReceiptPrinter::GetCustomerFooter()
 {
-    ReceiptPrintJob^ customerFooter = claimedInstance->Receipt->CreateJob();
-    customerFooter->PrintLine();
-    customerFooter->PrintLine("______________________");
-    customerFooter->PrintLine("Tip");
-    customerFooter->PrintLine();
-    customerFooter->PrintLine("Customer Copy");
-    LineFeedAndCutPaper(customerFooter);
-
-    return customerFooter;
+    return "\n" +
+           "______________________\n" +
+           "Tip\n" +
+           "\n" +
+           "Customer Copy\n";
 }
 
 // Cut the paper after printing enough blank lines to clear the paper cutter.
-void Scenario1_ReceiptPrinter::LineFeedAndCutPaper(ReceiptPrintJob^ job)
+void Scenario1_ReceiptPrinter::PrintLineFeedAndCutPaper(ReceiptPrintJob^ job, Platform::String^ receipt)
 {
     if (printer != nullptr && claimedPrinter != nullptr)
     {
+        // Passing a multi-line string to the Print method results in
+        // smoother paper feeding than sending multiple single-line strings
+        // to PrintLine.
+
+        Platform::String^ feedString = "";
         for (unsigned int n = 0; n < claimedPrinter->Receipt->LinesToPaperCut; n++)
         {
-            job->PrintLine();
+            feedString += "\n";
         }
-
+        job->Print(receipt + feedString);
         if (printer->Capabilities->Receipt->CanCutPaper)
         {
             job->CutPaper();
@@ -262,49 +254,24 @@ void Scenario1_ReceiptPrinter::LineFeedAndCutPaper(ReceiptPrintJob^ job)
     }
 }
 
-//
-//PosPrinter GetDeviceSelector gets the string format used to search for pos printer. This is then used to find any pos printers.
-//The method then takes the first printer id found and tries to create an instance of that printer.
-//
 task<void> Scenario1_ReceiptPrinter::FindReceiptPrinter()
 {
     if (printer == nullptr)
     {
         rootPage->NotifyUser("Finding printer", NotifyType::StatusMessage);
-        return create_task(DeviceInformation::FindAllAsync(PosPrinter::GetDeviceSelector())).then([this](DeviceInformationCollection^ deviceCollection)
+        return DeviceHelpers::GetFirstReceiptPrinterAsync().then([this](PosPrinter^ _printer)
         {
-            if (deviceCollection->Size == 0)
+            printer = _printer;
+            if (printer != nullptr)
             {
-                rootPage->NotifyUser("Did not find any printers", NotifyType::ErrorMessage);
-                return task_from_result();
+                rootPage->NotifyUser("Got Printer with Device Id : " + printer->DeviceId, NotifyType::StatusMessage);
             }
             else
             {
-                //Try to get the first printer that matched.
-                DeviceInformation^ printerInfo = deviceCollection->GetAt(0);
-                return create_task(PosPrinter::FromIdAsync(printerInfo->Id)).then([this](PosPrinter^ _printer)
-                {
-                    printer = _printer;
-                    if (printer != nullptr)
-                    {
-                        if (printer->Capabilities->Receipt->IsPrinterPresent)
-                        {
-                            rootPage->NotifyUser("Got Printer with Device Id : " + printer->DeviceId, NotifyType::StatusMessage);
-                            return;
-                        }
-                    }
-                    else
-                    {
-                        rootPage->NotifyUser("Could not get printer.", NotifyType::ErrorMessage);
-                    }
-                });
+                rootPage->NotifyUser("Could not get printer.", NotifyType::ErrorMessage);
             }
         });
-
-        rootPage->NotifyUser("No Printer found", NotifyType::ErrorMessage);
     }
-
-    rootPage->NotifyUser("done finding printer", NotifyType::StatusMessage);
     return task_from_result();
 }
 

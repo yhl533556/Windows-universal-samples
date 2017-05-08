@@ -49,7 +49,11 @@ namespace PosPrinterSample
                 claimedPrinter = null;
             }
 
-            printer = null;
+            if (printer != null)
+            {
+                printer.Dispose();
+                printer = null;
+            }
         }
 
         protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -221,33 +225,34 @@ namespace PosPrinterSample
                 return false;
             }
 
-            ReceiptPrintJob job = claimedPrinter.Receipt.CreateJob();
-            job.PrintLine("======================");
-            job.PrintLine("|   Sample Header    |");
-            job.PrintLine("======================");
+            string receiptString = "======================\n" +
+                                   "|   Sample Header    |\n" +
+                                   "======================\n" +
+                                   "Item             Price\n" +
+                                   "----------------------\n";
 
-            job.PrintLine("Item             Price");
-            job.PrintLine("----------------------");
             double total = 0.0;
             foreach (KeyValuePair<string, double> item in receiptItems)
             {
-                job.PrintLine(string.Format("{0,-15} {1,6:##0.00}", item.Key, item.Value));
+                receiptString += string.Format("{0,-15} {1,6:##0.00}\n", item.Key, item.Value);
                 total += item.Value;
             }
-            job.PrintLine("----------------------");
-            job.PrintLine(string.Format("Total-----------{0,6:##0.00}", total));
+            receiptString += "----------------------\n";
+            receiptString += string.Format("Total-----------{0,6:##0.00}\n", total);
 
-            ReceiptPrintJob merchantFooter = GetMerchantFooter(claimedPrinter);
-            ReceiptPrintJob customerFooter = GetCustomerFooter(claimedPrinter);
+            ReceiptPrintJob merchantJob = claimedPrinter.Receipt.CreateJob();
+            string merchantFooter = GetMerchantFooter();
+            PrintLineFeedAndCutPaper(merchantJob, receiptString + merchantFooter);
+
+            ReceiptPrintJob customerJob = claimedPrinter.Receipt.CreateJob();
+            string customerFooter = GetCustomerFooter();
+            PrintLineFeedAndCutPaper(customerJob, receiptString + customerFooter);
 
             // execute print jobs 
             // Note that we actually execute "job" twice in order to print 
             // the statement for both the customer as well as the merchant. 
-
-            if (!await job.ExecuteAsync() ||
-                !await customerFooter.ExecuteAsync() ||
-                !await job.ExecuteAsync() ||
-                !await merchantFooter.ExecuteAsync())
+            if (!(await merchantJob.ExecuteAsync()) ||
+                !(await customerJob.ExecuteAsync()))
             {
                 rootPage.NotifyUser("Failed to print receipts.", NotifyType.ErrorMessage);
                 return false;
@@ -256,45 +261,42 @@ namespace PosPrinterSample
             return true;
         }
 
-        private ReceiptPrintJob GetMerchantFooter(ClaimedPosPrinter printer)
+        private string GetMerchantFooter()
         {
-            ReceiptPrintJob merchantFooter = printer.Receipt.CreateJob();
-            merchantFooter.PrintLine();
-            merchantFooter.PrintLine("______________________");
-            merchantFooter.PrintLine("Tip");
-            merchantFooter.PrintLine();
-            merchantFooter.PrintLine("______________________");
-            merchantFooter.PrintLine("Signature");
-            merchantFooter.PrintLine();
-            merchantFooter.PrintLine("Merchant Copy");
-            LineFeedAndCutPaper(merchantFooter);
-
-            return merchantFooter;
+            return "\n" +
+                   "______________________\n" +
+                   "Tip\n" +
+                   "\n" +
+                   "______________________\n" +
+                   "Signature\n" +
+                   "\n" +
+                   "Merchant Copy\n";
         }
 
-        private ReceiptPrintJob GetCustomerFooter(ClaimedPosPrinter printer)
+        private string GetCustomerFooter()
         {
-            ReceiptPrintJob customerFooter = printer.Receipt.CreateJob();
-            customerFooter.PrintLine();
-            customerFooter.PrintLine("______________________");
-            customerFooter.PrintLine("Tip");
-            customerFooter.PrintLine();
-            customerFooter.PrintLine("Customer Copy");
-            LineFeedAndCutPaper(customerFooter);
-
-            return customerFooter;
+            return "\n" +
+                   "______________________\n" +
+                   "Tip\n" +
+                   "\n" +
+                   "Customer Copy\n";
         }
 
         // Cut the paper after printing enough blank lines to clear the paper cutter.
-        private void LineFeedAndCutPaper(ReceiptPrintJob job)
+        private void PrintLineFeedAndCutPaper(ReceiptPrintJob job, string receipt)
         {
             if (IsPrinterClaimed())
             {
+                // Passing a multi-line string to the Print method results in
+                // smoother paper feeding than sending multiple single-line strings
+                // to PrintLine.
+
+                string feedString = "";
                 for (uint n = 0; n < claimedPrinter.Receipt.LinesToPaperCut; n++)
                 {
-                    job.PrintLine();
+                    feedString += "\n";
                 }
-
+                job.Print(receipt + feedString);
                 if (printer.Capabilities.Receipt.CanCutPaper)
                 {
                     job.CutPaper();
@@ -302,36 +304,20 @@ namespace PosPrinterSample
             }
         }
 
-        /// <summary>
-        /// GetDeviceSelector method returns the string needed to identify a PosPrinter. This is passed to FindAllAsync method to get the list of devices currently available and we connect the first device.
-        /// </summary>
         private async Task<bool> FindReceiptPrinter()
         {
             if (printer == null)
             {
                 rootPage.NotifyUser("Finding printer", NotifyType.StatusMessage);
-                DeviceInformationCollection deviceCollection = await DeviceInformation.FindAllAsync(PosPrinter.GetDeviceSelector());
-                if (deviceCollection != null && deviceCollection.Count > 0)
+                printer = await DeviceHelpers.GetFirstReceiptPrinterAsync();
+                if (printer != null)
                 {
-                    DeviceInformation deviceInfo = deviceCollection[0];
-                    printer = await PosPrinter.FromIdAsync(deviceInfo.Id);
-                    if (printer != null)
-                    {
-                        if (printer.Capabilities.Receipt.IsPrinterPresent)
-                        {
-                            rootPage.NotifyUser("Got Printer with Device Id : " + printer.DeviceId, NotifyType.StatusMessage);
-                            return true;
-                        }
-                    }
-                    else
-                    {
-                        rootPage.NotifyUser("No Printer found", NotifyType.ErrorMessage);
-                        return false;
-                    }
+                    rootPage.NotifyUser("Got Printer with Device Id : " + printer.DeviceId, NotifyType.StatusMessage);
+                    return true;
                 }
                 else
                 {
-                    rootPage.NotifyUser("No devices returned by FindAllAsync.", NotifyType.ErrorMessage);
+                    rootPage.NotifyUser("No Printer found", NotifyType.ErrorMessage);
                     return false;
                 }
             }
